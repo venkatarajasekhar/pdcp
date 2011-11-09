@@ -41,24 +41,28 @@ PHP_RSHUTDOWN_FUNCTION(pdcp);
 PHP_MINFO_FUNCTION(pdcp);
 
 PHP_FUNCTION(confirm_pdcp_compiled);	/* For testing, remove later. */
-PHP_FUNCTION(pdcp_intit);
+PHP_FUNCTION(pdcp_init);
 PHP_FUNCTION(pdcp_get_connection);
 PHP_FUNCTION(pdcp_release);
 PHP_FUNCTION(pdcp_debug);
-
+typedef unsigned int php_uint32;
 extern PHPAPI int  php_register_info_logo(char *logo_string, const char *mimetype, const unsigned char *data, int size);
 extern PHPAPI void php_var_dump(zval **struc, int level TSRMLS_DC);
 extern PHPAPI void php_debug_zval_dump(zval **struc, int level TSRMLS_DC);
+PHPAPI void php_mt_srand(php_uint32 seed TSRMLS_DC);
+PHPAPI php_uint32 php_mt_rand(TSRMLS_D);
+
 
 /* 
   	Declare any global variables you may need between the BEGIN
 	and END macros here:     
-
+*/
 ZEND_BEGIN_MODULE_GLOBALS(pdcp)
 	long  global_value;
 	char *global_string;
+
 ZEND_END_MODULE_GLOBALS(pdcp)
-*/
+
 
 /* In every utility function you add that needs to use variables 
    in php_pdcp_globals, call TSRMLS_FETCH(); after declaring other 
