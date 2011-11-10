@@ -40,8 +40,8 @@ PHP_RINIT_FUNCTION(pdcp);
 PHP_RSHUTDOWN_FUNCTION(pdcp);
 PHP_MINFO_FUNCTION(pdcp);
 
-PHP_FUNCTION(confirm_pdcp_compiled);	/* For testing, remove later. */
 PHP_FUNCTION(pdcp_init);
+PHP_FUNCTION(pdcp_is_init);
 PHP_FUNCTION(pdcp_get_connection);
 PHP_FUNCTION(pdcp_release);
 PHP_FUNCTION(pdcp_debug);
