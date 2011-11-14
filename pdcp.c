@@ -28,6 +28,9 @@
 #include<mysql.h>
 #include "php_pdcp.h"
 
+//debug flag
+#define PDCP_DEBUG 1
+
 //author 
 
 #define VERSION "0.01 "
@@ -55,6 +58,7 @@
 #define PDCP_LOG_BUFF_SIZE 1024
 #define LOADFACTOR 1.3
 #define TRY_MAX 3
+#define PDCP_MYSQL_TIME_OUT 1
 
 
 //pdcp log path
@@ -186,8 +190,8 @@ PHP_MINIT_FUNCTION(pdcp)
 	/* If you have INI entries, uncomment these lines 
 	REGISTER_INI_ENTRIES();
 	*/
-	le_pdcp=zend_register_list_destructors_ex(_pdcp_close,NULL,"pdcp",module_number);
-	le_ppdcp=zend_register_list_destructors_ex(NULL,_pdcp_p_close,"pdcp_persistent",module_number);
+	//le_pdcp=zend_register_list_destructors_ex(_pdcp_close,NULL,"pdcp",module_number);
+	//le_ppdcp=zend_register_list_destructors_ex(NULL,_pdcp_p_close,"pdcp_persistent",module_number);
 
 	return SUCCESS;
 }
@@ -263,21 +267,38 @@ PHP_FUNCTION(pdcp_is_init){
 }
 
 
+#define PDCP_CLEANUP()\
+	do {         \
+     int i=0;     \
+     php_mysql_conn *con=NULL; \
+	 for(;i<max_pool_size;++i){  \
+		 con=g_connections[i]; \
+		 if(con!=NULL){ \
+		     mysql_close(&con->conn);\
+			 efree(con); \
+			 con=NULL;\
+		 }\
+	 } \
+	  max_pool_size=0;init_lock=0;\
+	}while(0)\
+
+
+
 /* {{{ proto bool  pdcp_intit(char *type,char *host,char *user,char *password)
 */
 
 
 PHP_FUNCTION(pdcp_init)
 {
-	int i=0,times=0;
+	int i=0,times=0,time_out=0;
 	char *type,*host,*user,*password;
 	int type_len,host_len,user_len,password_len,pool_size;
 	php_mysql_conn *con;
-	char *mysql_error_str;
+	char *mysql_error_str=NULL;
 	if(zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC,"ssssl",&type,&type_len,&host,&host_len,&user,&user_len,&password,&password_len,&pool_size)==FAILURE){
       RETURN_BOOL(0);
 	}
-
+    
 	//zend_str_tolower(type,type_len+1);
 	if(strcasecmp(type,"mysql")!=SUCCESS){
 		php_error_docref("pdcp_init" TSRMLS_CC ,E_ERROR,"only mysql support current in version 0.01");
@@ -303,42 +324,50 @@ PHP_FUNCTION(pdcp_init)
 	if(password==NULL){
 		password=MYSQL_DEFAULT_PASSWORD;
 	}
-
+	if(time_out==0){
+		time_out=PDCP_MYSQL_TIME_OUT;
+	}
 	for(;i<max_pool_size;++i){
-		con=(php_mysql_conn*)pemalloc(sizeof(php_mysql_conn),1);
-		con=(php_mysql_conn*)pemalloc(sizeof(php_mysql_conn),1);
 		con=(php_mysql_conn*)pemalloc(sizeof(php_mysql_conn),1);
 		if(con==NULL){
 			php_printf("out of memory ");
+		    max_pool_size=i-1;
+			PDCP_CLEANUP();
 			RETURN_BOOL(0);
 		}
 
 		mysql_init(&con->conn);
+		if(!time_out){
+			mysql_options(&con->conn,MYSQL_OPT_CONNECT_TIMEOUT,(const char*)&time_out);
+		}
 		if(mysql_real_connect(&con->conn,host,user,password,NULL,MYSQL_PORT,NULL,0)==NULL){
 			mysql_error_str=estrdup(mysql_error(&con->conn));
 			if(mysql_error_str){
 			php_error_docref(mysql_error_str TSRMLS_CC ,E_ERROR,"mysql_error %s",mysql_error_str);
 				efree(mysql_error_str);
 			}
+			max_pool_size=i-1;
+			PDCP_CLEANUP();
 			RETURN_BOOL(0);
 		}
 			con->active_result_id=i;
 			g_connections[i]=con;
 	}
 	max_pool_size=i;
+	
+	//get the mysql link type list id 
 	mysql_type=zend_fetch_list_dtor_id(MYSQL_TYPE);
+    //get the mysql persistent link list id 
 	mysql_ptype=zend_fetch_list_dtor_id(MYSQL_PTYPE);
+	
+	//if we can't get the two list id ,we can't inject resources to mysql extension ,do clean up and shutdown
 	if(mysql_type<=0||mysql_ptype<=0){
+		PDCP_CLEANUP();
 		php_error_docref("pdcp_init" TSRMLS_CC ,E_ERROR,"no mysql extension support");
+		PDCP_CLEANUP();
+		RETURN_BOOL(0);    
 	}
 	init_lock=1;
-	//g_log_fd=fopen(PDCP_LOG,"a+");
-	//if(g_log_fd!=NULL){
-	//	php_printf("init log succss\n");
-	//}else{
-	//	php_printf("init log success failed!\n");
-	//}
-
 	RETURN_BOOL(1);
 }
 /* }}} */
@@ -353,12 +382,13 @@ PHP_FUNCTION(pdcp_init)
 PHP_FUNCTION(pdcp_get_connection)
 {
 	int index=0,try_time=0;
-	zval *ret_mysql,*ret_mysql_p,*ret;
+	zval *ret;
     
 	php_mysql_conn * con=NULL,*newcon=NULL;
 	//char dec[32]={0};
 	if(init_lock==0){
 		php_error_docref("pdcp_get_connection" TSRMLS_CC,E_WARNING,"connection pool not initialize please use pdcp_init() to init the connection pool");
+		RETURN_BOOL(0);
 	}
 	do{
 		index=rand()%max_pool_size;
@@ -367,33 +397,22 @@ PHP_FUNCTION(pdcp_get_connection)
 		}
 		con=g_connections[index];
 		if(con!=NULL){
+         
+#ifdef PDCP_DEBUG
 			php_printf("con is not null mysql_type=%d index=%d\n",mysql_type,index);
-			//php_error_docref("pdcp_get_connection" TSRMLS_CC ,
-			//MAKE_STD_ZVAL(ret_mysql);
-			//MAKE_STD_ZVAL(ret_mysql_p);
+#endif
+			if(mysql_ping(&con->conn)!=SUCCESS){
+               php_error_docref("pdcp_get_connection" TSRMLS_CC,E_WARNING,"mysql ping failed,mysql may be shutdown");
+			   RETURN_BOOL(0);
+			}
 			MAKE_STD_ZVAL(ret);
-			//newcon=emalloc(sizeof(php_mysql_conn));
-		/*	if(newcon==NULL){
-				php_error_docref("pdcp_get_connection" TSRMLS_CC ,E_WARNING,"allocate for new connection failed");
-			    RETURN_BOOL(0);
-			}*/
-			//ZVAL_RESOURCE(ret,1);
-			//ZEND_REGISTER_RESOURCE(ret_mysql,con,mysql_type);
-			//ZEND_REGISTER_RESOURCE(ret_mysql_p,con,mysql_ptype);
-			//ZEND_REGISTER_RESOURCE(ret,con,mysql_type);
-			//memcpy(newcon,con,sizeof(php_mysql_conn));
-
-			ZEND_REGISTER_RESOURCE(ret,con,mysql_type);
-			php_var_dump(&ret,2 TSRMLS_CC);
+			ZEND_REGISTER_RESOURCE(ret,con,mysql_ptype);
 			current_use_index=index;
 			RETURN_ZVAL(ret,1,1);
-			//itoa(index,dec,10);
-			//if(zend_hash_update(&EG(persistent_list),dec,strlen(dec)+1,con,sizeof(php_mysql_conn),NULL)==FAILURE){
-			//	php_printf("update to persistent list failed!\n");
-			//	pdcp_log("pdcp_get_connection","update to persistent list failed!",__FILE__,__LINE__);
-			//}
 		}else{
+#ifdef PDCP_DEBUG
 			php_printf("try failed %d time index=%d \n",try_time,index);
+#endif
 		}
 		if(++try_time==TRY_MAX){
 			break;
@@ -409,7 +428,7 @@ PHP_FUNCTION(pdcp_release)
 {
 	 char *pdcp_type;
 	 php_mysql_conn *con=NULL;
-	 int type_len=0,index=0;
+	 int type_len=0,index=0,free_id=0;
 	 if(zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC,"s",&pdcp_type,&type_len)==FAILURE){
 			return;
 	 }
@@ -424,14 +443,20 @@ PHP_FUNCTION(pdcp_release)
 		 php_printf("only mysql support in version 0.01 please use \"mysql\" as the paramete\n");
 		 RETURN_BOOL(0);
 		 //return;
-
      }
 	
 	 for(;index<max_pool_size;++index){
 		 con=g_connections[index];
 		 if(con!=NULL){
 			 mysql_close(&con->conn);
+#ifdef PDCP_DEBUG
+	         php_printf("close mysql link id=%d\n",con->active_result_id);
+#endif
+			free_id=con->active_result_id;
 		    pefree(con,1);
+#ifdef PDCP_DEBUG
+			php_printf("free mysql link id=%d\n",free_id);
+#endif
 		 }
 		 con=NULL;
 	 }
@@ -453,9 +478,18 @@ static void show_debug_info(HashTable *ht,int fc,int cl){
 	zend_class_entry *ce;
 	zend_bool bret=1;
 	zval **data;
+	zval *arr=NULL;
+	MAKE_STD_ZVAL(arr);
+	array_init(arr);
+	Z_ARRVAL_P(arr)=ht;
+	php_printf("here num=%d\n",zend_hash_num_elements(ht));
+	php_var_dump(&arr,1 TSRMLS_CC);
+	return;
 	if(zend_hash_num_elements(ht)==0){
 		return;
 	}
+
+
 	for(zend_hash_internal_pointer_reset_ex(ht,&pos);
 		bret;
 		zend_hash_move_forward_ex(ht,&pos)){
@@ -493,17 +527,20 @@ PHP_FUNCTION(pdcp_debug)
 {
 	int i=0;
 	//php_printf("<pre>\n");
-	//show_debug_info(&EG(regular_list),0,0);
-	//show_debug_info(&EG(persistent_list),0,0);
+	php_printf("regular_list\n");
+	show_debug_info(&EG(regular_list),0,0);
+	php_printf("persistent_list\n");
+	show_debug_info(&EG(persistent_list),0,0);
 
 	//show_debug_info(EG(active_symbol_table),0,0);
-	//show_debug_info(&EG(included_files));
+	//show_debug_info(&EG(included_files),0,0);
 	//show_debug_info(EG(class_table));
 	//show_debug_info(EG(zend_constants),0,0);
 	//show_debug_info(EG(function_table),1,0);
 	//php_printf("</pre>\n");
 	//show_debug_info(EG(ini_directives));
 	//pemalloc(100,1);
+	
 	php_printf("debug info\n type=%s\npool size=%d\n current_use_index=%d\n","mysql",max_pool_size,current_use_index);
 
 	if(init_lock==0){
