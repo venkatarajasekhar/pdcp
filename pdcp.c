@@ -310,7 +310,7 @@ PHP_FUNCTION(pdcp_init)
 	}
 	if(pool_size>0&&pool_size<=PDCP_MAX_POOL_SIZE)max_pool_size=pool_size;
     g_connections=(php_mysql_conn**)pemalloc(sizeof(php_mysql_conn*)*max_pool_size,1);
-
+    
 	if(g_connections==NULL){
 		php_error_docref("allocate for connection pointers failed\n" TSRMLS_CC ,E_ERROR,"allocate for connection pointers failed\n");
 		RETURN_BOOL(0);
@@ -327,6 +327,7 @@ PHP_FUNCTION(pdcp_init)
 	if(time_out==0){
 		time_out=PDCP_MYSQL_TIME_OUT;
 	}
+  
 	for(;i<max_pool_size;++i){
 		con=(php_mysql_conn*)pemalloc(sizeof(php_mysql_conn),1);
 		if(con==NULL){
@@ -337,6 +338,7 @@ PHP_FUNCTION(pdcp_init)
 		}
 
 		mysql_init(&con->conn);
+        
 		if(!time_out){
 			mysql_options(&con->conn,MYSQL_OPT_CONNECT_TIMEOUT,(const char*)&time_out);
 		}
@@ -352,17 +354,16 @@ PHP_FUNCTION(pdcp_init)
 		}
 			con->active_result_id=i;
 			g_connections[i]=con;
+			
 	}
 	max_pool_size=i;
-	
+
 	//get the mysql link type list id 
 	mysql_type=zend_fetch_list_dtor_id(MYSQL_TYPE);
     //get the mysql persistent link list id 
 	mysql_ptype=zend_fetch_list_dtor_id(MYSQL_PTYPE);
-	
 	//if we can't get the two list id ,we can't inject resources to mysql extension ,do clean up and shutdown
 	if(mysql_type<=0||mysql_ptype<=0){
-		PDCP_CLEANUP();
 		php_error_docref("pdcp_init" TSRMLS_CC ,E_ERROR,"no mysql extension support");
 		PDCP_CLEANUP();
 		RETURN_BOOL(0);    
